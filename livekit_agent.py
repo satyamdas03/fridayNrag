@@ -102,6 +102,3 @@ if __name__ == "__main__":
             agent_name=os.getenv("AGENT_NAME", "rag-voice-agent"),
         )
     )
-
-
-

@@ -15,6 +15,7 @@ import docx
 
 import pytesseract
 from pytesseract import TesseractNotFoundError
+from typing import Generator
 
 try:
     import easyocr
@@ -105,8 +106,15 @@ def extract_text(path: str) -> str:
         logger.error("extract_text failed for %s: %s", path, e)
         return ""
 
-def chunk_text(text: str) -> list[str]:
-    """Yield overlapping word‐based chunks."""
+# def chunk_text(text: str) -> list[str]:
+#     """Yield overlapping word‐based chunks."""
+#     words = text.split()
+#     step = CHUNK_SIZE - CHUNK_OVERLAP
+#     for i in range(0, len(words), step):
+#         yield " ".join(words[i : i + CHUNK_SIZE])
+
+def chunk_text(text: str) -> Generator[str, None, None]:
+    """Yield overlapping word‑based chunks."""
     words = text.split()
     step = CHUNK_SIZE - CHUNK_OVERLAP
     for i in range(0, len(words), step):

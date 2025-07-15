@@ -1,0 +1,27 @@
+19(tue) --> megha(afternoonReach), satyam(eveningReach), busToOoty(19thNight11pmYelanka)
+
+20(wed) --> ReachOoty(6am), Om(tourGuide), Ooty(Roam)
+
+21(thu) --> Ooty(Roam), OotyLeave(NightBus)
+
+22(fri) --> Blr(Morning), MeghaLeave(AfternoonFlight-->1pm)
+
+23(sat) -->  SatyamStay
+
+24(sun) --> SatyamStay
+
+25 (mon) --> SatyamStay
+
+26 (tues) --> morningLeaveSatyam
+
+
+
+
+Coorg trip
+
+19 --> coreMangla(blr bus, 11:45pm)
+20 --> Coorg (6:00am), Coorg(roam)
+21 --> ----Coorg(roam)---
+22 --> Blr(Morning), MeghaLeave(AfternoonFlight-->1pm)
+23 --> SatyamStayLeave
+24 --> SatyamStayLeave

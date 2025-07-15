@@ -31,6 +31,8 @@ openai = "^1.95.1"
 faster-whisper = "^1.1.1"
 livekit-plugins-openai = "^1.1.6"
 livekit-plugins-noise-cancellation = "^0.2.5"
+pdfplumber = "^0.11.7"
+easyocr = "^1.7.2"
 
 
 [build-system]

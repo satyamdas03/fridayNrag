@@ -31,6 +31,9 @@ openai = "^1.95.1"
 faster-whisper = "^1.1.1"
 livekit-plugins-openai = "^1.1.6"
 livekit-plugins-noise-cancellation = "^0.2.5"
+pdfplumber = "^0.11.7"
+pdf2image = "^1.17.0"
+pymupdf = "^1.26.3"
 
 
 [build-system]

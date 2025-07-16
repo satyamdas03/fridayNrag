@@ -1,8 +1,7 @@
 # rag_utils.py
 import os
-import json
-import numpy as np
 import logging
+import numpy as np
 import openai
 from faster_whisper import WhisperModel
 from moviepy import AudioFileClip
@@ -12,20 +11,26 @@ import pandas as pd
 import pytesseract
 from pytesseract import TesseractNotFoundError
 from dotenv import load_dotenv
+import pdfplumber
+from pdf2image import convert_from_path
+from PIL import Image, ImageOps
+import fitz  # PyMuPDF
+from PIL import Image, ImageOps
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Make sure your OPENAI_API_KEY is set in .env
+# OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-UPLOAD_DIR     = "uploads"
-EMBED_MODEL    = "text-embedding-ada-002"
-CHUNK_SIZE     = 500
-CHUNK_OVERLAP  = 50
+# Constants
+UPLOAD_DIR    = "uploads"
+EMBED_MODEL   = "text-embedding-ada-002"
+CHUNK_SIZE    = 500
+CHUNK_OVERLAP = 50
 
-# Whisper for audio transcription
+# Whisper model for audio
 _whisper = WhisperModel("base", device="cpu", compute_type="int8")
 
 
@@ -42,47 +47,113 @@ def transcribe_audio(path: str) -> str:
     return " ".join(seg.text for seg in segments)
 
 
+def preprocess_for_ocr(path: str) -> str:
+    """
+    Grayscale + upscale to improve Tesseract accuracy.
+    Returns a new temp filepath.
+    """
+    img = Image.open(path)
+    img = ImageOps.grayscale(img)
+    w, h = img.size
+    img = img.resize((w * 2, h * 2), Image.ANTIALIAS)
+    temp_path = path + "_prep.png"
+    img.save(temp_path)
+    return temp_path
+
+
 def extract_text(path: str) -> str:
-    """Extract readable text from various file types."""
     suffix = os.path.splitext(path)[1].lower()
     try:
+        # ─── Audio ───────────────────────────────────────────
         if suffix in (".mp3", ".wav", ".m4a"):
             return transcribe_audio(path)
 
+        # ─── Video ───────────────────────────────────────────
         if suffix in (".mp4", ".mov", ".mkv"):
             wav = path + ".wav"
             AudioFileClip(path).write_audiofile(wav, verbose=False, logger=None)
             return transcribe_audio(wav)
 
+        # ─── Image ───────────────────────────────────────────
         if suffix in (".jpg", ".jpeg", ".png"):
+            # 1) Preprocess + Tesseract
+            prep = preprocess_for_ocr(path)
             try:
-                return pytesseract.image_to_string(path)
+                text = pytesseract.image_to_string(prep, config="--psm 6")
+                if text.strip():
+                    return text
             except TesseractNotFoundError:
-                logger.warning("Tesseract not installed; skipping OCR for %s", path)
-                return ""
+                logger.warning("Tesseract not found on PATH")
 
+            # 2) Last‑resort: return empty so you know OCR failed
+            return ""
+
+        # ─── PDF ──────────────────────────────────────────────
         if suffix == ".pdf":
+            pages = []
+
+            # 1) pdfplumber
             try:
-                with open(path, "rb") as f:
-                    reader = PyPDF2.PdfReader(f)
-                    return "\n".join(page.extract_text() or "" for page in reader.pages)
-            except Exception:
-                logger.warning("PyPDF2 failed on %s; no text extracted", path)
+                with pdfplumber.open(path) as pdf:
+                    for p in pdf.pages:
+                        txt = p.extract_text()
+                        if txt:
+                            pages.append(txt)
+            except Exception as e:
+                logger.warning("pdfplumber failed on %s: %s", path, e)
+            if pages:
+                return "\n".join(pages)
+
+            # 2) PyPDF2
+            try:
+                reader = PyPDF2.PdfReader(path)
+                for p in reader.pages:
+                    txt = p.extract_text()
+                    if txt:
+                        pages.append(txt)
+            except Exception as e:
+                logger.warning("PyPDF2 failed on %s: %s", path, e)
+            if pages:
+                return "\n".join(pages)
+
+            # 3) **Pure‑local OCR fallback via PyMuPDF + Tesseract**
+            try:
+                ocr_pages = []
+                # open PDF
+                doc = fitz.open(path)
+                for i, page in enumerate(doc, start=1):
+                    # render page at 2× scale
+                    mat = fitz.Matrix(2, 2)
+                    pix = page.get_pixmap(matrix=mat)
+                    # convert to PIL Image
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    tmp_img = f"{path}_page{i}.png"
+                    img.save(tmp_img, format="PNG")
+
+                    # preprocess + OCR
+                    prep = preprocess_for_ocr(tmp_img)
+                    txt = pytesseract.image_to_string(prep, config="--psm 6")
+                    if txt.strip():
+                        ocr_pages.append(txt)
+
+                return "\n\n".join(ocr_pages)
+            except Exception as e:
+                logger.error("PyMuPDF‑based OCR fallback failed on %s: %s", path, e)
                 return ""
 
+        # ─── DOCX ─────────────────────────────────────────────
         if suffix == ".docx":
             doc = docx.Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
 
+        # ─── CSV / XLSX / TXT / PY ───────────────────────────
+        if suffix == ".csv":
+            return pd.read_csv(path).to_string(index=False)
+        if suffix == ".xlsx":
+            return pd.read_excel(path, engine="openpyxl").to_string(index=False)
         if suffix in (".txt", ".py"):
             with open(path, encoding="utf8") as f:
                 return f.read()
-
-        if suffix == ".csv":
-            return pd.read_csv(path).to_string(index=False)
-
-        if suffix == ".xlsx":
-            return pd.read_excel(path, engine="openpyxl").to_string(index=False)
 
         raise ValueError(f"Unsupported file type: {suffix}")
 
@@ -101,13 +172,12 @@ def chunk_text(text: str):
 
 def embed_text(text: str) -> list[float]:
     """
-    Embed a single chunk of text.
-    Uses the new v1 embeddings interface: openai.embeddings.create(...)
+    Embed a single chunk of text using OpenAI v1 embeddings.
     """
     try:
         resp = openai.embeddings.create(
             model=EMBED_MODEL,
-            input=[text],     # must be a list
+            input=[text],
         )
         return resp.data[0].embedding
     except Exception as e:
@@ -118,17 +188,14 @@ def embed_text(text: str) -> list[float]:
 def retrieve_similar_chunks(query: str, top_k: int = 3):
     """
     1) Embed the query
-    2) Load & embed all chunks from all uploaded files
-    3) Compute cosine similarities
-    4) Return top_k matches
+    2) Build & embed all chunks
+    3) Cosine‑score & return top_k matches
     """
-    # 1) embed the query
     qv = np.array(embed_text(query))
     qn = np.linalg.norm(qv)
     if qn == 0:
         return []
 
-    # 2) build corpus on the fly
     corpus = []
     for path in list_uploaded_files():
         txt = extract_text(path)
@@ -137,9 +204,8 @@ def retrieve_similar_chunks(query: str, top_k: int = 3):
                 emb = embed_text(chunk)
                 corpus.append((emb, path, idx, chunk))
             except Exception as e:
-                logger.warning("Skipping failed chunk embedding [%s:%d]: %s", path, idx, e)
+                logger.warning("Skipping embedding [%s:%d]: %s", path, idx, e)
 
-    # 3) score them
     sims = []
     for emb, path, idx, chunk in corpus:
         ev = np.array(emb)
@@ -147,7 +213,5 @@ def retrieve_similar_chunks(query: str, top_k: int = 3):
         if denom > 0:
             sims.append((float(np.dot(ev, qv) / denom), path, idx, chunk))
 
-    # 4) pick top_k
     sims.sort(key=lambda x: x[0], reverse=True)
     return sims[:top_k]
-

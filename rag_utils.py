@@ -12,8 +12,6 @@ import pytesseract
 from pytesseract import TesseractNotFoundError
 from dotenv import load_dotenv
 import pdfplumber
-from pdf2image import convert_from_path
-from PIL import Image, ImageOps
 import fitz  # PyMuPDF
 from PIL import Image, ImageOps
 
@@ -55,7 +53,8 @@ def preprocess_for_ocr(path: str) -> str:
     img = Image.open(path)
     img = ImageOps.grayscale(img)
     w, h = img.size
-    img = img.resize((w * 2, h * 2), Image.ANTIALIAS)
+    # use Resampling.LANCZOS instead of deprecated ANTIALIAS
+    img = img.resize((w * 2, h * 2), Image.Resampling.LANCZOS)
     temp_path = path + "_prep.png"
     img.save(temp_path)
     return temp_path
@@ -76,7 +75,6 @@ def extract_text(path: str) -> str:
 
         # ─── Image ───────────────────────────────────────────
         if suffix in (".jpg", ".jpeg", ".png"):
-            # 1) Preprocess + Tesseract
             prep = preprocess_for_ocr(path)
             try:
                 text = pytesseract.image_to_string(prep, config="--psm 6")
@@ -84,13 +82,11 @@ def extract_text(path: str) -> str:
                     return text
             except TesseractNotFoundError:
                 logger.warning("Tesseract not found on PATH")
-
-            # 2) Last‑resort: return empty so you know OCR failed
             return ""
 
         # ─── PDF ──────────────────────────────────────────────
         if suffix == ".pdf":
-            pages = []
+            pages: list[str] = []
 
             # 1) pdfplumber
             try:
@@ -116,21 +112,18 @@ def extract_text(path: str) -> str:
             if pages:
                 return "\n".join(pages)
 
-            # 3) **Pure‑local OCR fallback via PyMuPDF + Tesseract**
+            # 3) PyMuPDF → PIL → Tesseract OCR fallback
             try:
-                ocr_pages = []
-                # open PDF
+                ocr_pages: list[str] = []
                 doc = fitz.open(path)
                 for i, page in enumerate(doc, start=1):
-                    # render page at 2× scale
+                    # render at 2×
                     mat = fitz.Matrix(2, 2)
                     pix = page.get_pixmap(matrix=mat)
-                    # convert to PIL Image
                     img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                     tmp_img = f"{path}_page{i}.png"
                     img.save(tmp_img, format="PNG")
 
-                    # preprocess + OCR
                     prep = preprocess_for_ocr(tmp_img)
                     txt = pytesseract.image_to_string(prep, config="--psm 6")
                     if txt.strip():
@@ -196,7 +189,7 @@ def retrieve_similar_chunks(query: str, top_k: int = 3):
     if qn == 0:
         return []
 
-    corpus = []
+    corpus: list[tuple[list[float], str, int, str]] = []
     for path in list_uploaded_files():
         txt = extract_text(path)
         for idx, chunk in enumerate(chunk_text(txt), start=1):
@@ -206,7 +199,7 @@ def retrieve_similar_chunks(query: str, top_k: int = 3):
             except Exception as e:
                 logger.warning("Skipping embedding [%s:%d]: %s", path, idx, e)
 
-    sims = []
+    sims: list[tuple[float, str, int, str]] = []
     for emb, path, idx, chunk in corpus:
         ev = np.array(emb)
         denom = np.linalg.norm(ev) * qn
